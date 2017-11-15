@@ -25,6 +25,7 @@
 #include "bucketfilltool.h"
 #include "createellipseobjecttool.h"
 #include "createobjecttool.h"
+#include "createpointobjecttool.h"
 #include "createpolygonobjecttool.h"
 #include "createpolylineobjecttool.h"
 #include "createrectangleobjecttool.h"
@@ -99,32 +100,38 @@ namespace Tiled {
 namespace Internal {
 
 /**
- * A proxy model that makes sure no items are checked or checkable.
+ * A proxy model that makes sure no items are checked or checkable and that
+ * there is only one column.
  *
  * Used in the layer combo box, since the checkboxes can't be used in that
  * context but are otherwise anyway rendered there on Windows.
  */
-class UncheckableItemsModel : public QIdentityProxyModel
+class ComboBoxProxyModel : public QIdentityProxyModel
 {
 public:
-    explicit UncheckableItemsModel(QObject *parent = nullptr)
+    explicit ComboBoxProxyModel(QObject *parent = nullptr)
         : QIdentityProxyModel(parent)
     {}
 
-    QVariant data(const QModelIndex &index, int role) const override
-    {
-        if (role == Qt::CheckStateRole)
-            return QVariant();
-
-        return QIdentityProxyModel::data(index, role);
-    }
-
-    Qt::ItemFlags flags(const QModelIndex &index) const override
-    {
-        Qt::ItemFlags rc = QIdentityProxyModel::flags(index);
-        return rc & ~Qt::ItemIsUserCheckable;
-    }
+    int columnCount(const QModelIndex &) const override { return 1; }
+    QVariant data(const QModelIndex &index, int role) const override;
+    Qt::ItemFlags flags(const QModelIndex &index) const override;
 };
+
+QVariant ComboBoxProxyModel::data(const QModelIndex &index, int role) const
+{
+    if (role == Qt::CheckStateRole)
+        return QVariant();
+
+    return QIdentityProxyModel::data(index, role);
+}
+
+Qt::ItemFlags ComboBoxProxyModel::flags(const QModelIndex &index) const
+{
+    Qt::ItemFlags rc = QIdentityProxyModel::flags(index);
+    return rc & ~Qt::ItemIsUserCheckable;
+}
+
 
 
 MapEditor::MapEditor(QObject *parent)
@@ -142,7 +149,7 @@ MapEditor::MapEditor(QObject *parent)
     , mWangDock(new WangDock(mMainWindow))
     , mMiniMapDock(new MiniMapDock(mMainWindow))
     , mLayerComboBox(new TreeViewComboBox)
-    , mUncheckableProxyModel(new UncheckableItemsModel(this))
+    , mComboBoxProxyModel(new ComboBoxProxyModel(this))
     , mReversingProxyModel(new ReversingProxyModel(this))
     , mZoomable(nullptr)
     , mZoomComboBox(new QComboBox)
@@ -172,6 +179,7 @@ MapEditor::MapEditor(QObject *parent)
     CreateObjectTool *tileObjectsTool = new CreateTileObjectTool(this);
     CreateTemplateTool *templatesTool = new CreateTemplateTool(this);
     CreateObjectTool *rectangleObjectsTool = new CreateRectangleObjectTool(this);
+    CreateObjectTool *pointObjectsTool = new CreatePointObjectTool(this);
     CreateObjectTool *ellipseObjectsTool = new CreateEllipseObjectTool(this);
     CreateObjectTool *polygonObjectsTool = new CreatePolygonObjectTool(this);
     CreateObjectTool *polylineObjectsTool = new CreatePolylineObjectTool(this);
@@ -190,6 +198,7 @@ MapEditor::MapEditor(QObject *parent)
     mToolsToolBar->addAction(mToolManager->registerTool(new ObjectSelectionTool(this)));
     mToolsToolBar->addAction(mToolManager->registerTool(mEditPolygonTool));
     mToolsToolBar->addAction(mToolManager->registerTool(rectangleObjectsTool));
+    mToolsToolBar->addAction(mToolManager->registerTool(pointObjectsTool));
     mToolsToolBar->addAction(mToolManager->registerTool(ellipseObjectsTool));
     mToolsToolBar->addAction(mToolManager->registerTool(polygonObjectsTool));
     mToolsToolBar->addAction(mToolManager->registerTool(polylineObjectsTool));
@@ -236,8 +245,8 @@ MapEditor::MapEditor(QObject *parent)
     mWangDock->setVisible(false);
     mTileStampsDock->setVisible(false);
 
-    mUncheckableProxyModel->setSourceModel(mReversingProxyModel);
-    mLayerComboBox->setModel(mUncheckableProxyModel);
+    mComboBoxProxyModel->setSourceModel(mReversingProxyModel);
+    mLayerComboBox->setModel(mComboBoxProxyModel);
     mLayerComboBox->setMinimumContentsLength(10);
     mLayerComboBox->setSizeAdjustPolicy(QComboBox::AdjustToContents);
     connect(mLayerComboBox, static_cast<void (QComboBox::*)(int)>(&QComboBox::activated),
@@ -763,7 +772,7 @@ void MapEditor::layerComboActivated()
         return;
 
     const QModelIndex comboIndex = mLayerComboBox->currentModelIndex();
-    const QModelIndex reversedIndex = mUncheckableProxyModel->mapToSource(comboIndex);
+    const QModelIndex reversedIndex = mComboBoxProxyModel->mapToSource(comboIndex);
     const QModelIndex sourceIndex = mReversingProxyModel->mapToSource(reversedIndex);
     Layer *layer = mCurrentMapDocument->layerModel()->toLayer(sourceIndex);
     if (!layer)
@@ -780,7 +789,7 @@ void MapEditor::updateLayerComboIndex()
         const auto currentLayer = mCurrentMapDocument->currentLayer();
         const QModelIndex sourceIndex = mCurrentMapDocument->layerModel()->index(currentLayer);
         const QModelIndex reversedIndex = mReversingProxyModel->mapFromSource(sourceIndex);
-        index = mUncheckableProxyModel->mapFromSource(reversedIndex);
+        index = mComboBoxProxyModel->mapFromSource(reversedIndex);
     }
 
     mLayerComboBox->setCurrentModelIndex(index);
@@ -825,7 +834,7 @@ void MapEditor::handleExternalTilesetsAndImages(const QStringList &fileNames,
         }
 
         // Check if the file is has a supported tileset format
-        TilesetFormat *tilesetFormat = findSupportingFormat(fileName);
+        TilesetFormat *tilesetFormat = findSupportingTilesetFormat(fileName);
         if (tilesetFormat) {
             tileset = tilesetFormat->read(fileName);
             if (tileset) {
